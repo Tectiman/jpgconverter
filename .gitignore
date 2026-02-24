@@ -38,6 +38,7 @@ test_pic/*
 !test_pic/README.md
 test_pic/output_*/
 test_pic/config_test_*.json
+test_pic/TEST_REPORT.md
 
 # Logs
 *.log
