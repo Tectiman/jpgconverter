@@ -1,0 +1,14 @@
+{
+  "tasks": [
+    {
+      "name": "JPG 转 Heic",
+      "input_path": "/path/to/input",
+      "output_path": "/path/to/output",
+      "input_format": "jpg",
+      "output_format": "heic",
+      "quality": 90,
+      "skip_existing": true,
+      "enabled": true
+    }
+  ]
+}

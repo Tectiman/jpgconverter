@@ -1,0 +1,45 @@
+# Python-generated files
+__pycache__/
+*.py[cod]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# Project specific - converted files
+*.heic
+*.avif
+*.jxl
+converted_*/
+jpg_output/
+avif_converted/
+heic_converted/
+jxl_converted/
+
+# Test files
+test_pic/test.*
+photos/test_*/
+
+# User photos and test images
+photos/*/*
+!photos/.gitkeep
+
+test_pic/*
+!test_pic/.gitkeep
+!test_pic/README.md
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
