@@ -36,6 +36,8 @@ photos/*/*
 test_pic/*
 !test_pic/.gitkeep
 !test_pic/README.md
+test_pic/output_*/
+test_pic/config_test_*.json
 
 # Logs
 *.log
