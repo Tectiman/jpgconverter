@@ -3,7 +3,6 @@
 from pathlib import Path
 
 from PIL import Image
-from pillow_heif import from_pillow
 
 
 def convert_to_modern(inp: Path, out: Path, quality: int, fmt: str) -> tuple[bool, str]:
@@ -20,18 +19,27 @@ def convert_to_modern(inp: Path, out: Path, quality: int, fmt: str) -> tuple[boo
         (成功标志，错误信息)
     """
     try:
+        # 使用 with 确保资源释放
         with Image.open(inp) as img:
             exif = img.info.get("exif")
+            
+            # 转换为 RGB
             if img.mode != "RGB":
                 img = img.convert("RGB")
+            
+            # 复制一份避免引用问题
+            rgb_img = img.copy()
 
+        # 在 with 块外保存，避免文件句柄冲突
+        with rgb_img:
             if fmt == "heic":
-                heif = from_pillow(img)
+                from pillow_heif import from_pillow
+                heif = from_pillow(rgb_img)
                 heif.save(out, quality=quality, exif=exif)
             elif fmt == "avif":
-                img.save(out, format="AVIF", quality=quality, exif=exif)
+                rgb_img.save(out, format="AVIF", quality=quality, exif=exif)
             elif fmt == "jxl":
-                img.save(out, format="JXL", quality=quality, exif=exif)
+                rgb_img.save(out, format="JXL", quality=quality, exif=exif)
             else:
                 return False, f"未知格式：{fmt}"
 
@@ -54,9 +62,10 @@ def convert_to_jpg(inp: Path, out: Path, quality: int, fmt: str) -> tuple[bool, 
         (成功标志，错误信息)
     """
     try:
+        # 使用 with 确保资源释放
         with Image.open(inp) as img:
             exif = img.info.get("exif")
-
+            
             # 处理不同模式
             if img.mode in ("RGBA", "LA", "P"):
                 # 带透明通道的图片，转换为白色背景
@@ -64,12 +73,15 @@ def convert_to_jpg(inp: Path, out: Path, quality: int, fmt: str) -> tuple[bool, 
                 if img.mode == "P":
                     img = img.convert("RGBA")
                 background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
-                img = background
+                rgb_img = background
             elif img.mode != "RGB":
-                img = img.convert("RGB")
+                rgb_img = img.convert("RGB")
+            else:
+                rgb_img = img.copy()
 
-            # 保存为 JPEG，保留 EXIF
-            img.save(out, format="JPEG", quality=quality, exif=exif)
+        # 在 with 块外保存
+        with rgb_img:
+            rgb_img.save(out, format="JPEG", quality=quality, exif=exif)
 
         return True, ""
     except Exception as e:
