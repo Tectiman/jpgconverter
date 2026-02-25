@@ -1,11 +1,14 @@
 """进度显示和任务执行模块"""
 
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from typing import List, Tuple
 
 from . import converter
-from .config import TaskConfig
+from .config_data import TaskConfig
 
 
 @dataclass
@@ -17,17 +20,75 @@ class TaskResult:
     skipped: int = 0
 
 
-class TaskProcessor:
-    """任务处理器（单线程模式）"""
+class ProgressBar:
+    """进度条显示"""
 
-    def __init__(self, status_interval: int = 10):
+    def __init__(self, total: int, description: str = ""):
+        self.total = total
+        self.current = 0
+        self.description = description
+        self.start_time = time.time()
+        self.lock = threading.Lock()
+
+    def update(self, n: int = 1):
+        """更新进度"""
+        with self.lock:
+            self.current += n
+            self._display()
+
+    def _display(self):
+        """显示进度条"""
+        if self.total == 0:
+            return
+
+        elapsed = time.time() - self.start_time
+        percentage = self.current / self.total * 100
+        
+        # 计算 ETA
+        if self.current > 0:
+            eta = elapsed * (self.total - self.current) / self.current
+        else:
+            eta = 0
+
+        # 进度条可视化
+        bar_length = 30
+        filled_length = int(bar_length * self.current // self.total)
+        bar = '█' * filled_length + '·' * (bar_length - filled_length)
+
+        # 原地刷新
+        print(f'\r{self.description} |{bar}| {percentage:5.1f}% [{self.current}/{self.total}] '
+              f'{elapsed:5.1f}s 剩{eta:5.1f}s', end='', flush=True)
+
+        if self.current >= self.total:
+            print()  # 完成后换行
+
+    def close(self):
+        """完成进度条"""
+        with self.lock:
+            self.current = self.total
+            self._display()
+
+
+class TaskProcessor:
+    """任务处理器（多线程优化版）"""
+
+    def __init__(
+        self,
+        max_workers: int = 8,
+        batch_size: int = 50,
+        show_progress: bool = True,
+    ):
         """
         初始化任务处理器
 
         Args:
-            status_interval: 状态更新间隔（秒）
+            max_workers: 最大工作线程数
+            batch_size: 批处理大小
+            show_progress: 是否显示进度条
         """
-        self.status_interval = status_interval
+        self.max_workers = max_workers
+        self.batch_size = batch_size
+        self.show_progress = show_progress
 
     def process(self, task: TaskConfig) -> TaskResult:
         """
@@ -63,18 +124,21 @@ class TaskProcessor:
         # 打印任务信息
         self._print_task_info(task, input_dir, output_dir, total)
 
-        # 准备转换任务
+        # 准备转换任务（跳过已存在的文件）
         tasks = self._prepare_tasks(files, output_dir, input_fmt, output_fmt, task.skip_existing)
         to_process = len(tasks)
+        skipped_count = total - to_process
 
         if to_process == 0:
             print("✅ 所有文件已存在", flush=True)
-            return TaskResult(skipped=total)
+            return TaskResult(skipped=skipped_count)
 
-        # 执行转换
-        return self._execute_tasks(tasks, task.quality, output_fmt)
+        # 执行转换（批处理 + 多线程）
+        result = self._execute_tasks_batch(tasks, task.quality, output_fmt)
+        result.skipped = skipped_count
+        return result
 
-    def _find_files(self, directory: Path, input_format: str) -> list[Path]:
+    def _find_files(self, directory: Path, input_format: str) -> List[Path]:
         """查找输入文件"""
         if input_format == "auto":
             all_files = []
@@ -85,12 +149,12 @@ class TaskProcessor:
 
     def _prepare_tasks(
         self,
-        files: list[Path],
+        files: List[Path],
         output_dir: Path,
         input_format: str,
         output_format: str,
         skip_existing: bool,
-    ) -> list[tuple[Path, Path, str]]:
+    ) -> List[Tuple[Path, Path, str]]:
         """
         准备转换任务列表
 
@@ -125,14 +189,14 @@ class TaskProcessor:
         print(f"   文件：{total}", flush=True)
         print(f"{separator}", flush=True)
 
-    def _execute_tasks(
+    def _execute_tasks_batch(
         self,
-        tasks: list[tuple[Path, Path, str]],
+        tasks: List[Tuple[Path, Path, str]],
         quality: int,
         output_format: str,
     ) -> TaskResult:
         """
-        执行转换任务
+        批处理 + 多线程执行转换
 
         Args:
             tasks: [(输入文件，输出文件，输出格式), ...]
@@ -143,44 +207,92 @@ class TaskProcessor:
             执行结果
         """
         to_process = len(tasks)
-        print(f"🔄 开始处理 ({to_process} 个文件)...", flush=True)
-
-        start_time = time.time()
-        last_status_time = start_time
         result = TaskResult()
 
-        # 单线程顺序执行
-        for i, (inp_path, out_path, fmt) in enumerate(tasks, 1):
-            try:
-                success, error = self._convert_file(inp_path, out_path, quality, fmt)
-                if success:
-                    result.success += 1
-                    print(f"[{i}/{to_process}] ✓ {inp_path.name}", flush=True)
-                else:
-                    result.failed += 1
-                    print(f"[{i}/{to_process}] ✗ {inp_path.name} - {error}", flush=True)
-            except KeyboardInterrupt:
-                print(f"\n⚠️  中断，已处理 {i-1}/{to_process}", flush=True)
-                break
-            except Exception as e:
-                result.failed += 1
-                print(f"[{i}/{to_process}] ✗ {inp_path.name} - {e}", flush=True)
+        # 分组批处理
+        batches = [
+            tasks[i:i + self.batch_size]
+            for i in range(0, len(tasks), self.batch_size)
+        ]
 
-            # 定期输出进度
-            now = time.time()
-            if now - last_status_time >= self.status_interval and i < to_process:
-                self._print_status(i, to_process, start_time)
-                last_status_time = now
+        print(f"🔄 开始处理 ({to_process} 个文件，{len(batches)} 批，{self.max_workers} 线程)...", flush=True)
+
+        # 进度条
+        if self.show_progress:
+            progress = ProgressBar(to_process, "处理进度")
+        else:
+            progress = None
+
+        start_time = time.time()
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # 提交每个批次
+            futures = {
+                executor.submit(self._process_batch, batch, quality): batch
+                for batch in batches
+            }
+
+            # 处理完成的批次
+            for future in as_completed(futures):
+                batch = futures[future]
+                try:
+                    batch_result = future.result()
+                    result.success += batch_result['success']
+                    result.failed += batch_result['failed']
+
+                    # 更新进度条
+                    if progress:
+                        progress.update(len(batch))
+
+                except Exception as e:
+                    # 批次整体失败
+                    result.failed += len(batch)
+                    print(f"\n❌ 批次处理失败：{e}", flush=True)
+
+        # 关闭进度条
+        if progress:
+            progress.close()
 
         # 打印最终结果
         elapsed = time.time() - start_time
         print(
             f"\n✅ 成功:{result.success}, 失败:{result.failed}, 跳过:{result.skipped} "
-            f"(耗时:{elapsed:.0f}秒)",
+            f"(耗时:{elapsed:.0f}秒，速度:{to_process/elapsed:.1f}文件/秒)",
             flush=True,
         )
 
         return result
+
+    def _process_batch(
+        self,
+        batch: List[Tuple[Path, Path, str]],
+        quality: int,
+    ) -> dict:
+        """
+        处理单个批次的文件
+
+        Args:
+            batch: [(输入文件，输出文件，输出格式), ...]
+            quality: 质量
+
+        Returns:
+            {'success': int, 'failed': int}
+        """
+        batch_result = {'success': 0, 'failed': 0}
+
+        for inp, out, fmt in batch:
+            try:
+                success, error = self._convert_file(inp, out, quality, fmt)
+                if success:
+                    batch_result['success'] += 1
+                else:
+                    batch_result['failed'] += 1
+                    print(f"\n✗ {inp.name} - {error}", flush=True)
+            except Exception as e:
+                batch_result['failed'] += 1
+                print(f"\n✗ {inp.name} - {e}", flush=True)
+
+        return batch_result
 
     def _convert_file(
         self, inp: Path, out: Path, quality: int, fmt: str
@@ -202,10 +314,3 @@ class TaskProcessor:
             return converter.convert_to_modern(inp, out, quality, fmt)
         else:
             return converter.convert_to_jpg(inp, out, quality, fmt)
-
-    def _print_status(self, current: int, total: int, start_time: float) -> None:
-        """打印进度状态"""
-        elapsed = time.time() - start_time
-        rate = current / elapsed if elapsed > 0 else 0
-        remaining = (total - current) / rate if rate > 0 else 0
-        print(f"⏳ {current}/{total} ({rate:.1f} 文件/秒，剩余{remaining:.0f}秒)", flush=True)

@@ -65,6 +65,9 @@ test_pic/output_*/
 test_pic/config_test_*.json
 test_pic/TEST_REPORT.md
 
+# User config (optional)
+config.py
+
 # Logs
 *.log
 
