@@ -1,13 +1,11 @@
 """进度显示和任务执行模块"""
 
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import converter
 from .config import TaskConfig
-from .worker import is_shutdown
 
 
 @dataclass
@@ -20,17 +18,15 @@ class TaskResult:
 
 
 class TaskProcessor:
-    """任务处理器"""
+    """任务处理器（单线程模式）"""
 
-    def __init__(self, max_workers: int = 8, status_interval: int = 10):
+    def __init__(self, status_interval: int = 10):
         """
         初始化任务处理器
 
         Args:
-            max_workers: 最大工作线程数
             status_interval: 状态更新间隔（秒）
         """
-        self.max_workers = max_workers
         self.status_interval = status_interval
 
     def process(self, task: TaskConfig) -> TaskResult:
@@ -153,38 +149,28 @@ class TaskProcessor:
         last_status_time = start_time
         result = TaskResult()
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # 提交任务
-            futures = {
-                executor.submit(self._convert_file, inp, out, quality, fmt): (inp, out)
-                for inp, out, fmt in tasks
-            }
-
-            # 处理完成的
-            for i, future in enumerate(as_completed(futures), 1):
-                if is_shutdown():
-                    print(f"\n⚠️  中断，已处理 {i-1}/{to_process}", flush=True)
-                    break
-
-                inp_path, _ = futures[future]
-
-                try:
-                    success, error = future.result()
-                    if success:
-                        result.success += 1
-                        print(f"[{i}/{to_process}] ✓ {inp_path.name}", flush=True)
-                    else:
-                        result.failed += 1
-                        print(f"[{i}/{to_process}] ✗ {inp_path.name} - {error}", flush=True)
-                except Exception as e:
+        # 单线程顺序执行
+        for i, (inp_path, out_path, fmt) in enumerate(tasks, 1):
+            try:
+                success, error = self._convert_file(inp_path, out_path, quality, fmt)
+                if success:
+                    result.success += 1
+                    print(f"[{i}/{to_process}] ✓ {inp_path.name}", flush=True)
+                else:
                     result.failed += 1
-                    print(f"[{i}/{to_process}] ✗ {inp_path.name} - {e}", flush=True)
+                    print(f"[{i}/{to_process}] ✗ {inp_path.name} - {error}", flush=True)
+            except KeyboardInterrupt:
+                print(f"\n⚠️  中断，已处理 {i-1}/{to_process}", flush=True)
+                break
+            except Exception as e:
+                result.failed += 1
+                print(f"[{i}/{to_process}] ✗ {inp_path.name} - {e}", flush=True)
 
-                # 定期输出进度
-                now = time.time()
-                if now - last_status_time >= self.status_interval and i < to_process:
-                    self._print_status(i, to_process, start_time)
-                    last_status_time = now
+            # 定期输出进度
+            now = time.time()
+            if now - last_status_time >= self.status_interval and i < to_process:
+                self._print_status(i, to_process, start_time)
+                last_status_time = now
 
         # 打印最终结果
         elapsed = time.time() - start_time

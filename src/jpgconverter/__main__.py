@@ -14,7 +14,6 @@ from pathlib import Path
 
 from .config import AppConfig
 from .progress import TaskProcessor, TaskResult
-from .worker import setup_signal_handlers
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,13 +23,12 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  %(prog)s -c config.json          使用配置文件
-  %(prog)s -c config.json --jobs 4 指定线程数
+  %(prog)s -c config.json    使用配置文件
 
 支持的转换方向:
-  JPG → HEIC/AVIF/JXL              压缩为现代格式
-  HEIC/AVIF/JXL → JPG              转回兼容格式
-  auto → JPG                       自动检测混合格式转 JPG
+  JPG → HEIC/AVIF/JXL        压缩为现代格式
+  HEIC/AVIF/JXL → JPG        转回兼容格式
+  auto → JPG                 自动检测混合格式转 JPG
         """,
     )
     parser.add_argument(
@@ -39,13 +37,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         required=True,
         help="配置文件路径 (JSON 格式)",
-    )
-    parser.add_argument(
-        "-j",
-        "--jobs",
-        type=int,
-        default=8,
-        help="并发线程数 (默认：8)",
     )
     return parser.parse_args()
 
@@ -99,9 +90,6 @@ def main() -> None:
     """主入口函数"""
     args = parse_args()
 
-    # 设置信号处理
-    setup_signal_handlers()
-
     # 加载配置
     config = load_config(args.config)
     tasks = config.get_enabled_tasks()
@@ -113,8 +101,8 @@ def main() -> None:
     # 打印头部信息
     print_header(args.config, len(tasks))
 
-    # 创建处理器并执行任务
-    processor = TaskProcessor(max_workers=args.jobs)
+    # 创建处理器并执行任务（单线程模式）
+    processor = TaskProcessor()
     total_result = TaskResult()
 
     for task in tasks:

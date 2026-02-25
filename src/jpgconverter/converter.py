@@ -3,8 +3,7 @@
 from pathlib import Path
 
 from PIL import Image
-
-from .worker import get_worker
+from pillow_heif import from_pillow
 
 
 def convert_to_modern(inp: Path, out: Path, quality: int, fmt: str) -> tuple[bool, str]:
@@ -21,15 +20,13 @@ def convert_to_modern(inp: Path, out: Path, quality: int, fmt: str) -> tuple[boo
         (成功标志，错误信息)
     """
     try:
-        worker = get_worker()
-
         with Image.open(inp) as img:
             exif = img.info.get("exif")
             if img.mode != "RGB":
                 img = img.convert("RGB")
 
             if fmt == "heic":
-                heif = worker.from_pillow(img)
+                heif = from_pillow(img)
                 heif.save(out, quality=quality, exif=exif)
             elif fmt == "avif":
                 img.save(out, format="AVIF", quality=quality, exif=exif)
@@ -57,9 +54,6 @@ def convert_to_jpg(inp: Path, out: Path, quality: int, fmt: str) -> tuple[bool, 
         (成功标志，错误信息)
     """
     try:
-        # 确保所有插件已注册
-        get_worker()
-
         with Image.open(inp) as img:
             exif = img.info.get("exif")
 
